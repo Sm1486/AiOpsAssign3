@@ -7,6 +7,7 @@ import numpy as np
 import ray
 import ray.data
 
+os.environ["RAY_AUTH_MODE"] = "disabled"
 TRIP_DATA_DIR = "TrafficData/Subsample"
 ZONE_CSV = "TrafficData/taxi_zone_lookup.csv"
 OUTPUT_DIR = "output/ray_output"
