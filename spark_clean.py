@@ -36,11 +36,8 @@ print("local dir:", spark.sparkContext.getConf().get("spark.local.dir", "NOT SET
 time_start = time.perf_counter()
 proc = psutil.Process(os.getpid())
 
-REQUIRED_COLS = ["VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime",
-                 "passenger_count", "trip_distance", "PULocationID",
-                 "DOLocationID", "fare_amount", "total_amount"]
+REQUIRED_COLS = ["VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime","passenger_count", "trip_distance", "PULocationID","DOLocationID", "fare_amount", "total_amount"]
 
-# FIX: read from TRIP_DATA_DIR (was hard-coded to TrafficData/*.parquet)
 trips_raw = spark.read.parquet(f"{TRIP_DATA_DIR}/*.parquet").select(*REQUIRED_COLS)
 zones_raw = spark.read.option("header", True).csv(ZONE_CSV)
 
@@ -55,34 +52,29 @@ trips_clean = (
     .withColumn("tpep_pickup_datetime", F.to_timestamp(F.col("tpep_pickup_datetime")))
     .withColumn("tpep_dropoff_datetime", F.to_timestamp(F.col("tpep_dropoff_datetime")))
     .filter(F.col("tpep_dropoff_datetime") > F.col("tpep_pickup_datetime"))
-    .dropDuplicates(["VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime",
-                     "PULocationID", "DOLocationID", "total_amount"])
+    .dropDuplicates(["VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime","PULocationID", "DOLocationID", "total_amount"])
     .withColumn("PULocationID", F.col("PULocationID").cast("int"))
     .withColumn("DOLocationID", F.col("DOLocationID").cast("int"))
 )
 
 trips_featured = (
     trips_clean
-    .withColumn("trip_duration_min",
-                (F.unix_timestamp("tpep_dropoff_datetime") - F.unix_timestamp("tpep_pickup_datetime")) / 60.0)
+    .withColumn("trip_duration_min", (F.unix_timestamp("tpep_dropoff_datetime") - F.unix_timestamp("tpep_pickup_datetime")) / 60.0)
     .withColumn("pickup_hour", F.hour("tpep_pickup_datetime"))
     .withColumn("pickup_dow", F.dayofweek("tpep_pickup_datetime"))
     .withColumn("pickup_date", F.to_date("tpep_pickup_datetime"))
 )
 
-# Run the dedupe shuffle once, save, and read back so later steps don't repeat it
 trips_featured.write.mode("overwrite").parquet(CLEAN_DIR)
 trips_featured = spark.read.parquet(CLEAN_DIR)
 
 trips_featured.explain(True)
 
-# ---- Main pipeline: native expression (runs entirely in the JVM) ----
 native_start = time.perf_counter()
 
 trips_with_speed = (
     trips_featured
-    .withColumn("avg_speed_mph",
-                F.col("trip_distance") / (F.col("trip_duration_min") / 60.0))
+    .withColumn("avg_speed_mph", F.col("trip_distance") / (F.col("trip_duration_min") / 60.0))
     .filter(F.col("avg_speed_mph") <= 150)
 )
 
@@ -134,9 +126,6 @@ speed_by_hour = (
 
 speed_by_hour.show(24, truncate=False)
 
-# Optional: if you see hundreds of tiny date partitions from bad timestamps,
-# filter to the real date range before writing, e.g.
-# trips_joined = trips_joined.filter(F.col("pickup_date").between("2025-01-01", "2025-12-31"))
 (trips_joined
     .repartition("pickup_date")
     .write.mode("overwrite").partitionBy("pickup_date")
@@ -146,8 +135,6 @@ speed_by_hour.write.mode("overwrite").parquet(f"{OUTPUT_DIR}/speed_by_hour")
 time_elapsed = time.perf_counter() - time_start
 mem_mb = proc.memory_info().rss / (1024 ** 2)
 
-# ---- UDF vs native timing on a 1% sample (isolated so a Python-worker
-# ---- failure cannot break the main pipeline above) ----
 def compute_avg_speed_mph(distance_miles, duration_min):
     if duration_min is None or duration_min <= 0:
         return None
@@ -159,7 +146,7 @@ udf_sample_elapsed = None
 native_sample_elapsed = None
 try:
     sample = trips_featured.sample(fraction=0.01, seed=42).cache()
-    sample.count()  # materialize so neither timing includes file reads
+    sample.count()
 
     t0 = time.perf_counter()
     sample.withColumn("s", avg_speed_udf(F.col("trip_distance"), F.col("trip_duration_min"))) \
